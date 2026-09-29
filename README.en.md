@@ -52,23 +52,23 @@ Requirements: Windows PowerShell 5.1+, `sqlcmd.exe` in PATH, read/delete permiss
 
 ### 1. Connection, summary and stale agent lists
 
-![Connection, summary and lists](docs/images/en/01-connection-summary-lists.png)
+![Connection, summary and lists](/en/01-connection-summary-lists.png)
 
 ### 2. Threshold selection, double confirmation and deletion result
 
-![Selection, double confirmation and deletion](docs/images/en/02-selection-double-confirmation-deletion.png)
+![Selection, double confirmation and deletion](/en/02-selection-double-confirmation-deletion.png)
 
 ### 3. If the second confirmation does not match, the operation is cancelled
 
-![Second confirmation cancelled](docs/images/en/03-second-confirmation-cancelled.png)
+![Second confirmation cancelled](/en/03-second-confirmation-cancelled.png)
 
 ### 4. If "N" is given at the first confirmation, the operation is cancelled
 
-![First confirmation cancelled](docs/images/en/04-first-confirmation-cancelled.png)
+![First confirmation cancelled](/en/04-first-confirmation-cancelled.png)
 
 ### 5. If there are no stale agents, the deletion question is not asked
 
-![No stale agents](docs/images/en/05-no-stale-agents.png)
+![No stale agents](/en/05-no-stale-agents.png)
 
 ---
 
