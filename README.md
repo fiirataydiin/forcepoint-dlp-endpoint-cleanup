@@ -50,23 +50,23 @@ Gereksinimler: Windows PowerShell 5.1+, PATH'te `sqlcmd.exe`, veritabanında ilg
 
 ### 1. Bağlantı, özet ve eski agent listeleri
 
-![Bağlantı, özet ve liste](docs/images/01-baglanti-ozet-liste.png)
+![Bağlantı, özet ve liste](/images/01-baglanti-ozet-liste.png)
 
 ### 2. Gün seçimi, çift onay ve silme sonucu
 
-![Seçim, çift onay ve silme](docs/images/02-secim-cift-onay-silme.png)
+![Seçim, çift onay ve silme](/images/02-secim-cift-onay-silme.png)
 
 ### 3. İkinci onay eşleşmezse işlem iptal edilir
 
-![İkinci onay iptal](docs/images/03-ikinci-onay-iptal.png)
+![İkinci onay iptal](/images/03-ikinci-onay-iptal.png)
 
 ### 4. Birinci onayda "H" verilirse işlem iptal edilir
 
-![Birinci onay iptal](docs/images/04-birinci-onay-iptal.png)
+![Birinci onay iptal](/images/04-birinci-onay-iptal.png)
 
 ### 5. Eski agent yoksa silme sorusu sorulmaz
 
-![Eski agent yok](docs/images/05-eski-agent-yok.png)
+![Eski agent yok](/images/05-eski-agent-yok.png)
 
 ---
 
