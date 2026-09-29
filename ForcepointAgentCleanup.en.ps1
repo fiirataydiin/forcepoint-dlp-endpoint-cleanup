@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 
 <#
 .SYNOPSIS
@@ -13,7 +13,8 @@
       2. Shows the total number of agents in the system.
       3. Lists agents that have not reported for 7 / 15 / 30 days
          (PA_DYNAMIC_STATUS.UPDATE_DATE = 'Last Update' in FSM).
-      4. Asks how old the records to delete must be (7 / 15 / 30 days).
+      4. Asks what to delete: agents older than 7 / 15 / 30 days OR specific machine(s)
+         given by hostname (v2).
       5. Requires a DOUBLE CONFIRMATION: first Y/N, then typing the number of records to delete.
       6. Backs up the records to be deleted as a CSV on the desktop, then deletes them in a
          SINGLE transaction (PROPS first, then STATUS) and reports the number of deleted agents.
@@ -21,13 +22,18 @@
     NOTE: This script ONLY deletes Endpoint Status (live status) records. If an agent connects
     to FSM again, its record is recreated. It does NOT uninstall agents from endpoint machines.
 
+    v2: Added "4 = Delete specific machine(s) by hostname" to the deletion menu. Hostnames must
+    match exactly (case-insensitive), wildcards are not accepted. An extra warning is shown for
+    machines that still look active. Machines whose Last Update changed between listing and
+    deletion (reconnected) are not deleted.
+
     Author: FIRAT AYDIN
 
 .EXAMPLE
-    .\ForcepointAgentCleanup.en.ps1
+    .\ForcepointAgentCleanup_v2.en.ps1
 
 .EXAMPLE
-    .\ForcepointAgentCleanup.en.ps1 -SqlServerInstance "SQL01" -SqlAuthMode SqlLogin -SqlUserName sa
+    .\ForcepointAgentCleanup_v2.en.ps1 -SqlServerInstance "SQL01" -SqlAuthMode SqlLogin -SqlUserName sa
 #>
 
 [CmdletBinding()]
@@ -222,42 +228,101 @@ foreach ($b in $bands) {
     if ($items.Count -gt 0) { Show-EndpointTable -Items $items } else { Write-Host 'No records.' -ForegroundColor Green }
 }
 
+if (@($endpoints).Count -eq 0) {
+    Write-Host ''
+    Write-Host 'There are no agents in the Endpoint Status list, nothing to delete.' -ForegroundColor Green
+    exit 0
+}
 if ($staleByThreshold[$script:Thresholds[0]].Count -eq 0) {
     Write-Host ''
-    Write-Host "No agents older than $($script:Thresholds[0]) days, nothing to delete." -ForegroundColor Green
-    exit 0
+    Write-Host "No agents older than $($script:Thresholds[0]) days. You can still delete a specific machine by hostname (option 4)." -ForegroundColor Green
 }
 
 # ------------------------------------------------------------------------------------
-# 3) Threshold selection
+# 3) Deletion scope: threshold (1-3) or specific machine(s) by hostname (4)
 # ------------------------------------------------------------------------------------
 Write-Section -Title 'DELETION'
-Write-Host 'Delete Endpoint Status machines older than how many days?'
+Write-Host 'Which Endpoint Status machines do you want to delete?'
 for ($i = 0; $i -lt $script:Thresholds.Count; $i++) {
     $t = $script:Thresholds[$i]
     Write-Host ("  {0} = Agents older than {1} days ({2} agents)" -f ($i + 1), $t, $staleByThreshold[$t].Count)
 }
+Write-Host '  4 = Delete specific machine(s) by hostname'
 Write-Host '  0 = Cancel (nothing is deleted)'
 $choice = (Read-Host -Prompt 'Your choice').Trim()
-if ($choice -notmatch '^[1-3]$') {
+if ($choice -notmatch '^[1-4]$') {
     Write-Host 'Operation cancelled, no records were deleted.' -ForegroundColor DarkYellow
     exit 0
 }
-$selectedDays = $script:Thresholds[[int]$choice - 1]
-$toDelete = @($staleByThreshold[$selectedDays])
-if ($toDelete.Count -eq 0) {
-    Write-Host "No agents older than $selectedDays days, nothing to delete." -ForegroundColor Green
-    exit 0
+
+$manualMode = ($choice -eq '4')
+$selectedDays = $null
+if ($manualMode) {
+    Write-Host ''
+    Write-Host 'Enter the exact hostname of the machines to delete; separate multiple machines with commas.' -ForegroundColor Gray
+    Write-Host 'Case-insensitive; wildcards such as * are not accepted.' -ForegroundColor DarkGray
+    $hostInput = Read-Host -Prompt 'Hostname(s)'
+    $requested = @($hostInput -split '[,;\s]+' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+    if ($requested.Count -eq 0) {
+        Write-Host 'No hostname entered. Operation cancelled, no records were deleted.' -ForegroundColor DarkYellow
+        exit 0
+    }
+    if (@($requested | Where-Object { $_ -match '[\*\?%]' }).Count -gt 0) {
+        Write-Host 'Wildcards (* ? %) are not accepted. Operation cancelled, no records were deleted.' -ForegroundColor DarkYellow
+        exit 0
+    }
+    # Culture-independent, case-insensitive exact match (Ordinal, avoids the Turkish i/I issue)
+    $requestedSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($h in $requested) { [void]$requestedSet.Add($h) }
+    $toDelete = @($endpoints | Where-Object { $requestedSet.Contains([string]$_.Hostname) })
+    $foundSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($e in $toDelete) { [void]$foundSet.Add([string]$e.Hostname) }
+    $notFound = @($requestedSet | Where-Object { -not $foundSet.Contains($_) })
+    if ($notFound.Count -gt 0) {
+        Write-Host ("Hostname(s) not found in the Endpoint Status list: {0}" -f ($notFound -join ', ')) -ForegroundColor DarkYellow
+    }
+    if ($toDelete.Count -eq 0) {
+        Write-Host 'No matching machines found. Operation cancelled, no records were deleted.' -ForegroundColor DarkYellow
+        exit 0
+    }
+    $scopeText = 'selected'
+}
+else {
+    $selectedDays = $script:Thresholds[[int]$choice - 1]
+    $toDelete = @($staleByThreshold[$selectedDays])
+    if ($toDelete.Count -eq 0) {
+        Write-Host "No agents older than $selectedDays days, nothing to delete." -ForegroundColor Green
+        exit 0
+    }
+    $scopeText = "older than $selectedDays days"
 }
 
 Write-Host ''
-Write-Host "$($toDelete.Count) agents older than $selectedDays days will be deleted:" -ForegroundColor Yellow
+if ($manualMode) {
+    Write-Host "$($toDelete.Count) selected $(if ($toDelete.Count -eq 1) { 'agent' } else { 'agents' }) will be deleted:" -ForegroundColor Yellow
+} else {
+    Write-Host "$($toDelete.Count) $(if ($toDelete.Count -eq 1) { 'agent' } else { 'agents' }) $scopeText will be deleted:" -ForegroundColor Yellow
+}
 Show-EndpointTable -Items $toDelete
+
+# Machines that still look active: even if deleted, they come back to the list on their next connection.
+if ($manualMode) {
+    $activeOnes = @($toDelete | Where-Object { $null -eq $_.DaysAgo -or $_.DaysAgo -lt $script:Thresholds[0] })
+    foreach ($a in $activeOnes) {
+        $when = if ($null -eq $a.DaysAgo) { 'has no Last Update value' } elseif ($a.DaysAgo -eq 0) { 'connected today' } elseif ($a.DaysAgo -eq 1) { 'connected 1 day ago' } else { "connected $($a.DaysAgo) days ago" }
+        Write-Host "WARNING: $($a.Hostname) $when and still looks active." -ForegroundColor Yellow
+    }
+    if ($activeOnes.Count -gt 0) {
+        Write-Host 'Active machines come back to the list on their next connection even if deleted.' -ForegroundColor Yellow
+        Write-Host ''
+    }
+}
 
 # ------------------------------------------------------------------------------------
 # 4) Double confirmation
 # ------------------------------------------------------------------------------------
-$confirm1 = (Read-Host -Prompt "CONFIRMATION 1: Do you want to delete $($toDelete.Count) agent records older than $selectedDays days? (Y/N)").Trim()
+$confirm1Text = if ($manualMode) { "CONFIRMATION 1: Do you want to delete $($toDelete.Count) selected agent $(if ($toDelete.Count -eq 1) { 'record' } else { 'records' })? (Y/N)" } else { "CONFIRMATION 1: Do you want to delete $($toDelete.Count) agent $(if ($toDelete.Count -eq 1) { 'record' } else { 'records' }) $($scopeText)? (Y/N)" }
+$confirm1 = (Read-Host -Prompt $confirm1Text).Trim()
 if ($confirm1 -notin @('Y', 'y', 'Yes', 'yes', 'YES')) {
     Write-Host 'Operation cancelled, no records were deleted.' -ForegroundColor DarkYellow
     exit 0
@@ -274,24 +339,44 @@ if ($confirm2 -ne [string]$toDelete.Count) {
 # 5) Backup + deletion
 # ------------------------------------------------------------------------------------
 $desktop = [Environment]::GetFolderPath('Desktop')
-$backupFile = Join-Path $desktop ("Forcepoint_EndpointStatus_Deleted_{0}days_{1}.csv" -f $selectedDays, (Get-Date -Format 'yyyyMMdd_HHmmss'))
+$backupScope = if ($manualMode) { 'Selected' } else { "$($selectedDays)days" }
+$backupFile = Join-Path $desktop ("Forcepoint_EndpointStatus_Deleted_{0}_{1}.csv" -f $backupScope, (Get-Date -Format 'yyyyMMdd_HHmmss'))
 $toDelete | Select-Object Id, Hostname, IpAddress, LastUpdate, DaysAgo, Synced, LoggedInUsers, Version |
     Export-Csv -LiteralPath $backupFile -NoTypeInformation -Encoding UTF8
 Write-Host "Backup saved: $backupFile" -ForegroundColor Cyan
 
-# IDs are safe: only [long] values are written into the SQL.
-$idValues = ($toDelete | ForEach-Object { "($([long]$_.Id))" }) -join ",`r`n"
+# Values are safe: only [long] IDs and Last Update values validated as 'yyyy-MM-dd HH:mm:ss'
+# are written into the SQL (hostnames are NEVER written into the SQL).
+$idValues = ($toDelete | ForEach-Object {
+    $lu = if ([string]$_.LastUpdate -match '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$') { "N'$($_.LastUpdate)'" } else { 'NULL' }
+    "($([long]$_.Id), $lu)"
+}) -join ",`r`n"
+if ($manualMode) {
+    # Safety: records whose Last Update differs from what was shown on screen (reconnected meanwhile) are not deleted.
+    $guardSql = @'
+DELETE i FROM @ids i
+WHERE NOT EXISTS (SELECT 1 FROM PA_DYNAMIC_STATUS s
+                  WHERE s.ID = i.ID
+                    AND ((i.LU IS NULL AND s.UPDATE_DATE IS NULL)
+                         OR CONVERT(NVARCHAR(19), s.UPDATE_DATE, 120) = i.LU));
+'@
+}
+else {
+    # Safety: records updated more recently than the selected threshold (reconnected meanwhile) are not deleted.
+    $guardSql = @"
+DELETE i FROM @ids i
+WHERE NOT EXISTS (SELECT 1 FROM PA_DYNAMIC_STATUS s
+                  WHERE s.ID = i.ID AND s.UPDATE_DATE < DATEADD(day, -$([int]$selectedDays), GETDATE()));
+"@
+}
 $deleteSql = @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
-DECLARE @ids TABLE (ID BIGINT PRIMARY KEY);
-INSERT INTO @ids (ID) VALUES
+DECLARE @ids TABLE (ID BIGINT PRIMARY KEY, LU NVARCHAR(19) NULL);
+INSERT INTO @ids (ID, LU) VALUES
 $idValues;
 
--- Safety: records updated more recently than the selected threshold (reconnected meanwhile) are not deleted.
-DELETE i FROM @ids i
-WHERE NOT EXISTS (SELECT 1 FROM PA_DYNAMIC_STATUS s
-                  WHERE s.ID = i.ID AND s.UPDATE_DATE < DATEADD(day, -$selectedDays, GETDATE()));
+$guardSql
 
 DECLARE @props INT, @status INT;
 BEGIN TRY
